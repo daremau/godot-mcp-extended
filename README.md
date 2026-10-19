@@ -1,15 +1,15 @@
-# Godot MCP
+# godot-mcp-extended
 
-[![Github-sponsors](https://img.shields.io/badge/sponsor-30363D?style=for-the-badge&logo=GitHub-Sponsors&logoColor=#EA4AAA)](https://github.com/sponsors/Coding-Solo)
+Originally based on [Coding-Solo/godot-mcp](https://github.com/Coding-Solo/godot-mcp) by Solomon Elias (MIT). Independently developed as `godot-mcp-extended` since v0.2.0.
 
 [![](https://badge.mcpx.dev?type=server 'MCP Server')](https://modelcontextprotocol.io/introduction)
 [![Made with Godot](https://img.shields.io/badge/Made%20with-Godot-478CBF?style=flat&logo=godot%20engine&logoColor=white)](https://godotengine.org)
 [![](https://img.shields.io/badge/Node.js-339933?style=flat&logo=nodedotjs&logoColor=white 'Node.js')](https://nodejs.org/en/download/)
 [![](https://img.shields.io/badge/TypeScript-3178C6?style=flat&logo=typescript&logoColor=white 'TypeScript')](https://www.typescriptlang.org/)
 
-[![](https://img.shields.io/github/last-commit/Coding-Solo/godot-mcp 'Last Commit')](https://github.com/Coding-Solo/godot-mcp/commits/main)
-[![](https://img.shields.io/github/stars/Coding-Solo/godot-mcp 'Stars')](https://github.com/Coding-Solo/godot-mcp/stargazers)
-[![](https://img.shields.io/github/forks/Coding-Solo/godot-mcp 'Forks')](https://github.com/Coding-Solo/godot-mcp/network/members)
+[![](https://img.shields.io/github/last-commit/daremau/godot-mcp-extended 'Last Commit')](https://github.com/daremau/godot-mcp-extended/commits/main)
+[![](https://img.shields.io/github/stars/daremau/godot-mcp-extended 'Stars')](https://github.com/daremau/godot-mcp-extended/stargazers)
+[![](https://img.shields.io/github/forks/daremau/godot-mcp-extended 'Forks')](https://github.com/daremau/godot-mcp-extended/network/members)
 [![](https://img.shields.io/badge/License-MIT-red.svg 'MIT License')](https://opensource.org/licenses/MIT)
 
 
@@ -77,6 +77,18 @@ Godot MCP enables AI agents to launch the Godot editor, run projects, capture de
 - **UID Management** (for Godot 4.4+):
   - Get UID for specific files
   - Update UID references by resaving resources
+- **.NET Diagnostics** (extended):
+  - `dotnet_build` with structured file/line/code compiler diagnostics
+  - `dotnet_test` test runs with structured results
+- **Runtime observation & control** (extended):
+  - `run_project_capture` with `[SIGNAL]` markers and exit verdicts
+  - Opt-in in-game hook (`hook/signal_hook.gd`) + `hook_exec` (`tree|read|shot|quit|press|stats`; `shot` returns path + base64)
+- **Scene inspection & editing** (new):
+  - `dump_scene`, `list_assets`, `get_project_settings` (no Godot run needed)
+  - `set_node_property`, `remove_node`, `rename_node`, `duplicate_node`,
+    `instance_scene`, `create_script`, `attach_script`, `connect_signal`
+  - `check_script` (fast GDScript parse), `run_tests`, `export_check`
+- **Multi-host setup** (extended): `setup --host opencode|claude|codex|chatgpt|all`
 
 ## Requirements
 
@@ -89,7 +101,7 @@ Godot MCP enables AI agents to launch the Godot editor, run projects, capture de
 ### Claude Code
 
 ```bash
-claude mcp add godot -- npx @coding-solo/godot-mcp
+claude mcp add godot -- npx godot-mcp-extended
 ```
 
 That's it. Restart Claude Code and your Godot MCP tools are available.
@@ -97,8 +109,74 @@ That's it. Restart Claude Code and your Godot MCP tools are available.
 With environment variables:
 
 ```bash
-claude mcp add godot -e GODOT_PATH=/path/to/godot -e DEBUG=true -- npx @coding-solo/godot-mcp
+claude mcp add godot -e GODOT_PATH=/path/to/godot -e DEBUG=true -- npx godot-mcp-extended
 ```
+
+### opencode
+
+Easiest — use the built-in installer (backs up your config first):
+
+```bash
+node build/index.js setup --host opencode --godot-path /path/to/godot
+```
+
+Then restart opencode. Or add manually to `~/.config/opencode/opencode.json`:
+
+```json
+{
+  "mcp": {
+    "godot-mcp": {
+      "command": ["node", "/path/to/godot-mcp-extended/build/index.js"],
+      "enabled": true,
+      "type": "local",
+      "environment": { "GODOT_PATH": "/path/to/godot" },
+      "timeout": 300000
+    }
+  }
+}
+```
+
+### ChatGPT desktop / Codex CLI
+For Codex CLI, use the installer (appends a `[mcp_servers.godot-mcp]` table to `~/.codex/config.toml`):
+
+```bash
+node build/index.js setup --host codex --godot-path /path/to/godot
+```
+
+For the ChatGPT desktop app, MCP config paths vary by version — run the installer for manual steps:
+
+```bash
+node build/index.js setup --host chatgpt --godot-path /path/to/godot
+```
+
+then add the printed command (`node …/build/index.js` with `GODOT_PATH` set) as a local MCP server and restart the app.
+
+## Runtime hook (opt-in)
+
+`run_project_capture` observes games through `[SIGNAL]` log markers. For live inspection,
+install the optional in-game hook:
+
+```bash
+cp hook/signal_hook.gd /path/to/project/signal_hook.gd
+```
+
+then add to the project's `project.godot`:
+
+```ini
+[autoload]
+SignalHook="*res://signal_hook.gd"
+```
+
+Restart the game via `run_project`; `hook_exec` can then run `tree` (subtree dump),
+`read` (read-only expression on a node, e.g. `position`), `shot` (viewport PNG),
+and `quit` (graceful exit).
+
+Security boundary: the hook file is **never installed automatically** — you copy it yourself.
+It is dormant unless `SIGNAL_HOOK=1` is in the environment (the sidecar sets it only for
+runs of projects containing the file). Commands are an allow-list (`tree|read|shot|quit`);
+`read` rejects sources containing `set_`, `load(`, `OS.`, `FileAccess`, `DirAccess`,
+`Engine`, and friends, and the TCP server binds `127.0.0.1` only. Screenshots save inside
+the project under `.signal/`.
 
 <details>
 <summary><strong>Cline</strong></summary>
@@ -110,7 +188,7 @@ Add to your Cline MCP settings file (`~/Library/Application Support/Code/User/gl
   "mcpServers": {
     "godot": {
       "command": "npx",
-      "args": ["@coding-solo/godot-mcp"],
+      "args": ["godot-mcp-extended"],
       "env": {
         "DEBUG": "true"
       },
@@ -148,7 +226,7 @@ Add to your Cline MCP settings file (`~/Library/Application Support/Code/User/gl
 3. Fill out the form:
    - Name: `godot`
    - Type: `command`
-   - Command: `npx @coding-solo/godot-mcp`
+   - Command: `npx godot-mcp-extended`
 4. Click "Add"
 5. You may need to press the refresh button in the top right corner of the MCP server card to populate the tool list
 
@@ -161,7 +239,7 @@ Create a file at `.cursor/mcp.json` in your project directory:
   "mcpServers": {
     "godot": {
       "command": "npx",
-      "args": ["@coding-solo/godot-mcp"],
+      "args": ["godot-mcp-extended"],
       "env": {
         "DEBUG": "true"
       }
@@ -182,7 +260,7 @@ For any MCP-compatible client, use this configuration:
   "mcpServers": {
     "godot": {
       "command": "npx",
-      "args": ["@coding-solo/godot-mcp"],
+      "args": ["godot-mcp-extended"],
       "env": {
         "GODOT_PATH": "/path/to/godot",
         "DEBUG": "true"
@@ -205,8 +283,8 @@ For any MCP-compatible client, use this configuration:
 <summary><strong>Building from Source</strong></summary>
 
 ```bash
-git clone https://github.com/Coding-Solo/godot-mcp.git
-cd godot-mcp
+git clone https://github.com/daremau/godot-mcp-extended.git
+cd godot-mcp-extended
 npm install
 npm run build
 ```
