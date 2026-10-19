@@ -1,6 +1,6 @@
-# Contributing to Godot MCP
+# Contributing to godot-mcp-extended
 
-Thank you for considering contributing to Godot MCP! This document outlines the process for contributing to the project.
+Thank you for considering contributing to godot-mcp-extended! This document outlines the process for contributing to the project.
 
 ## Code of Conduct
 
@@ -45,7 +45,7 @@ By participating in this project, you agree to maintain a respectful and inclusi
 ### Project Structure
 
 ```
-godot-mcp/
+godot-mcp-extended/
 ├── src/             # Source code
 │   └── index.ts     # Main server implementation
 ├── build/           # Compiled JavaScript (generated)

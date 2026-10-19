@@ -9,13 +9,13 @@
     "claude",
     "cline"
   ],
-  "homepage": "https://github.com/Coding-Solo/godot-mcp",
+  "homepage": "https://github.com/daremau/godot-mcp-extended",
   "bugs": {
-    "url": "https://github.com/Coding-Solo/godot-mcp/issues"
+    "url": "https://github.com/daremau/godot-mcp-extended/issues"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/Coding-Solo/godot-mcp.git"
+    "url": "https://github.com/daremau/godot-mcp-extended.git"
   },
   "license": "MIT",
   "author": "Solomon Elias <solomon@sippy.ai>",

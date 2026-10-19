@@ -1,15 +1,15 @@
-# Godot MCP
+# godot-mcp-extended
 
-[![Github-sponsors](https://img.shields.io/badge/sponsor-30363D?style=for-the-badge&logo=GitHub-Sponsors&logoColor=#EA4AAA)](https://github.com/sponsors/Coding-Solo)
+Originally based on [Coding-Solo/godot-mcp](https://github.com/Coding-Solo/godot-mcp) by Solomon Elias (MIT). Independently developed as `godot-mcp-extended` since v0.2.0.
 
 [![](https://badge.mcpx.dev?type=server 'MCP Server')](https://modelcontextprotocol.io/introduction)
 [![Made with Godot](https://img.shields.io/badge/Made%20with-Godot-478CBF?style=flat&logo=godot%20engine&logoColor=white)](https://godotengine.org)
 [![](https://img.shields.io/badge/Node.js-339933?style=flat&logo=nodedotjs&logoColor=white 'Node.js')](https://nodejs.org/en/download/)
 [![](https://img.shields.io/badge/TypeScript-3178C6?style=flat&logo=typescript&logoColor=white 'TypeScript')](https://www.typescriptlang.org/)
 
-[![](https://img.shields.io/github/last-commit/Coding-Solo/godot-mcp 'Last Commit')](https://github.com/Coding-Solo/godot-mcp/commits/main)
-[![](https://img.shields.io/github/stars/Coding-Solo/godot-mcp 'Stars')](https://github.com/Coding-Solo/godot-mcp/stargazers)
-[![](https://img.shields.io/github/forks/Coding-Solo/godot-mcp 'Forks')](https://github.com/Coding-Solo/godot-mcp/network/members)
+[![](https://img.shields.io/github/last-commit/daremau/godot-mcp-extended 'Last Commit')](https://github.com/daremau/godot-mcp-extended/commits/main)
+[![](https://img.shields.io/github/stars/daremau/godot-mcp-extended 'Stars')](https://github.com/daremau/godot-mcp-extended/stargazers)
+[![](https://img.shields.io/github/forks/daremau/godot-mcp-extended 'Forks')](https://github.com/daremau/godot-mcp-extended/network/members)
 [![](https://img.shields.io/badge/License-MIT-red.svg 'MIT License')](https://opensource.org/licenses/MIT)
 
 
@@ -101,7 +101,7 @@ Godot MCP enables AI agents to launch the Godot editor, run projects, capture de
 ### Claude Code
 
 ```bash
-claude mcp add godot -- npx @coding-solo/godot-mcp
+claude mcp add godot -- npx godot-mcp-extended
 ```
 
 That's it. Restart Claude Code and your Godot MCP tools are available.
@@ -109,7 +109,7 @@ That's it. Restart Claude Code and your Godot MCP tools are available.
 With environment variables:
 
 ```bash
-claude mcp add godot -e GODOT_PATH=/path/to/godot -e DEBUG=true -- npx @coding-solo/godot-mcp
+claude mcp add godot -e GODOT_PATH=/path/to/godot -e DEBUG=true -- npx godot-mcp-extended
 ```
 
 ### opencode
@@ -188,7 +188,7 @@ Add to your Cline MCP settings file (`~/Library/Application Support/Code/User/gl
   "mcpServers": {
     "godot": {
       "command": "npx",
-      "args": ["@coding-solo/godot-mcp"],
+      "args": ["godot-mcp-extended"],
       "env": {
         "DEBUG": "true"
       },
@@ -226,7 +226,7 @@ Add to your Cline MCP settings file (`~/Library/Application Support/Code/User/gl
 3. Fill out the form:
    - Name: `godot`
    - Type: `command`
-   - Command: `npx @coding-solo/godot-mcp`
+   - Command: `npx godot-mcp-extended`
 4. Click "Add"
 5. You may need to press the refresh button in the top right corner of the MCP server card to populate the tool list
 
@@ -239,7 +239,7 @@ Create a file at `.cursor/mcp.json` in your project directory:
   "mcpServers": {
     "godot": {
       "command": "npx",
-      "args": ["@coding-solo/godot-mcp"],
+      "args": ["godot-mcp-extended"],
       "env": {
         "DEBUG": "true"
       }
@@ -260,7 +260,7 @@ For any MCP-compatible client, use this configuration:
   "mcpServers": {
     "godot": {
       "command": "npx",
-      "args": ["@coding-solo/godot-mcp"],
+      "args": ["godot-mcp-extended"],
       "env": {
         "GODOT_PATH": "/path/to/godot",
         "DEBUG": "true"
@@ -283,8 +283,8 @@ For any MCP-compatible client, use this configuration:
 <summary><strong>Building from Source</strong></summary>
 
 ```bash
-git clone https://github.com/Coding-Solo/godot-mcp.git
-cd godot-mcp
+git clone https://github.com/daremau/godot-mcp-extended.git
+cd godot-mcp-extended
 npm install
 npm run build
 ```
