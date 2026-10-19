@@ -80,6 +80,10 @@ Godot MCP enables AI agents to launch the Godot editor, run projects, capture de
 - **.NET Diagnostics** (extended):
   - `dotnet_build` with structured file/line/code compiler diagnostics
   - `dotnet_test` test runs with structured results
+- **Runtime observation & control** (extended):
+  - `run_project_capture` with `[SIGNAL]` markers and exit verdicts
+  - Opt-in in-game hook (`hook/signal_hook.gd`) + `hook_exec` (`tree|read|shot|quit`)
+- **Multi-host setup** (extended): `setup --host opencode|claude|codex|chatgpt|all`
 
 ## Requirements
 
