@@ -128,7 +128,6 @@ Then restart opencode. Or add manually to `~/.config/opencode/opencode.json`:
 ```
 
 ### ChatGPT desktop / Codex CLI
-
 For Codex CLI, use the installer (appends a `[mcp_servers.godot-mcp]` table to `~/.codex/config.toml`):
 
 ```bash
@@ -142,6 +141,33 @@ node build/index.js setup --host chatgpt --godot-path /path/to/godot
 ```
 
 then add the printed command (`node …/build/index.js` with `GODOT_PATH` set) as a local MCP server and restart the app.
+
+## Runtime hook (opt-in)
+
+`run_project_capture` observes games through `[SIGNAL]` log markers. For live inspection,
+install the optional in-game hook:
+
+```bash
+cp hook/signal_hook.gd /path/to/project/signal_hook.gd
+```
+
+then add to the project's `project.godot`:
+
+```ini
+[autoload]
+SignalHook="*res://signal_hook.gd"
+```
+
+Restart the game via `run_project`; `hook_exec` can then run `tree` (subtree dump),
+`read` (read-only expression on a node, e.g. `position`), `shot` (viewport PNG),
+and `quit` (graceful exit).
+
+Security boundary: the hook file is **never installed automatically** — you copy it yourself.
+It is dormant unless `SIGNAL_HOOK=1` is in the environment (the sidecar sets it only for
+runs of projects containing the file). Commands are an allow-list (`tree|read|shot|quit`);
+`read` rejects sources containing `set_`, `load(`, `OS.`, `FileAccess`, `DirAccess`,
+`Engine`, and friends, and the TCP server binds `127.0.0.1` only. Screenshots save inside
+the project under `.signal/`.
 
 <details>
 <summary><strong>Cline</strong></summary>

@@ -22,6 +22,7 @@ import {
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
 import { runSetup } from './setup.js';
+import { parseHookPort, HookConnection } from './hook_client.js';
 
 // Check if debug mode is enabled
 const DEBUG_MODE: boolean = process.env.DEBUG === 'true';
@@ -65,6 +66,7 @@ interface OperationParams {
 class GodotServer {
   private server: Server;
   private activeProcess: GodotProcess | null = null;
+  private hookConn: { port: number; conn: HookConnection } | null = null;
   private godotPath: string | null = null;
   private operationsScriptPath: string;
   private validatedPaths: Map<string, boolean> = new Map();
@@ -93,6 +95,7 @@ class GodotServer {
     'max_diagnostics': 'maxDiagnostics',
     'duration_seconds': 'durationSeconds',
     'fail_on_error': 'failOnError',
+    'max_depth': 'maxDepth',
   };
 
   /**
@@ -1023,6 +1026,32 @@ class GodotServer {
             required: ['projectPath'],
           },
         },
+        {
+          name: 'hook_exec',
+          description: 'Send an allow-listed command (tree|read|shot|quit) to the opt-in signal_hook in a running game. Requires an active run_project session with the hook installed.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              command: {
+                type: 'string',
+                description: 'Hook command: tree, read, shot, or quit',
+              },
+              target: {
+                type: 'string',
+                description: 'Optional: node path for tree/read (absolute like /root/Main or relative to the current scene, defaults to ".")',
+              },
+              expression: {
+                type: 'string',
+                description: 'Required for read: read-only Expression evaluated on the target node',
+              },
+              maxDepth: {
+                type: 'number',
+                description: 'Optional: subtree depth for tree (defaults to 3)',
+              },
+            },
+            required: ['command'],
+          },
+        },
       ],
     }));
 
@@ -1064,6 +1093,8 @@ class GodotServer {
           return await this.handleDotnetTest(request.params.arguments);
         case 'run_project_capture':
           return await this.handleRunProjectCapture(request.params.arguments);
+        case 'hook_exec':
+          return await this.handleHookExec(request.params.arguments);
         default:
           throw new McpError(
             ErrorCode.MethodNotFound,
@@ -1191,6 +1222,7 @@ class GodotServer {
       if (this.activeProcess) {
         this.logDebug('Killing existing Godot process before starting a new one');
         this.activeProcess.process.kill();
+        this.dropHookConn();
       }
 
       const cmdArgs = ['-d', '--path', args.projectPath];
@@ -1200,7 +1232,7 @@ class GodotServer {
       }
 
       this.logDebug(`Running Godot project: ${args.projectPath}`);
-      const process = spawn(this.godotPath!, cmdArgs, { stdio: 'pipe' });
+      const process = spawn(this.godotPath!, cmdArgs, { stdio: 'pipe', env: this.hookEnv(args.projectPath) });
       const output: string[] = [];
       const errors: string[] = [];
 
@@ -1304,6 +1336,7 @@ class GodotServer {
 
     this.logDebug('Stopping active Godot process');
     this.activeProcess.process.kill();
+    this.dropHookConn();
     const output = this.activeProcess.output;
     const errors = this.activeProcess.errors;
     this.activeProcess = null;
@@ -2573,7 +2606,7 @@ class GodotServer {
     this.logDebug(`Capturing Godot run for ${durationSeconds}s: ${args.projectPath}`);
 
     const startedAt = Date.now();
-    const child = spawn(this.godotPath, cmdArgs, { stdio: 'pipe' });
+    const child = spawn(this.godotPath, cmdArgs, { stdio: 'pipe', env: this.hookEnv(args.projectPath) });
     const lines: string[] = [];
     const events: any[] = [];
     let invalidMarkers = 0;
@@ -2628,6 +2661,7 @@ class GodotServer {
 
     if (this.activeProcess === tracked) {
       this.activeProcess = null;
+      this.dropHookConn();
     }
 
     let errorCount = 0;
@@ -2668,6 +2702,117 @@ class GodotServer {
         },
       ],
     };
+  }
+
+  /**
+   * Environment for spawning a game run: activates the opt-in signal hook
+   * (hook/signal_hook.gd) only when the project contains signal_hook.gd.
+   */
+  private hookEnv(projectPath: string): Record<string, string> {
+    const env: Record<string, string> = {};
+    for (const [k, v] of Object.entries(process.env)) {
+      if (v !== undefined) env[k] = v;
+    }
+    try {
+      if (existsSync(join(projectPath, 'signal_hook.gd'))) {
+        env.SIGNAL_HOOK = '1';
+        this.logDebug('signal_hook.gd present: SIGNAL_HOOK=1 for this run');
+      }
+    } catch {
+      // Ignore filesystem errors; run proceeds without the hook.
+    }
+    return env;
+  }
+
+  /**
+   * Find the hook TCP port printed by a running game ([SIGNAL-PORT] <port>).
+   */
+  private findHookPort(): number | null {
+    if (!this.activeProcess) return null;
+    return parseHookPort(this.activeProcess.output);
+  }
+
+  /**
+   * Drop the cached hook connection (game exited, port changed, or command failed).
+   */
+  private dropHookConn(): void {
+    if (this.hookConn) {
+      try {
+        this.hookConn.conn.close();
+      } catch {
+        // Ignore close errors.
+      }
+      this.hookConn = null;
+    }
+  }
+
+  /**
+   * Handle the hook_exec tool (spec 04).
+   * @param args Tool arguments
+   */
+  private async handleHookExec(args: any) {
+    args = this.normalizeParameters(args);
+
+    const command = String(args.command ?? '');
+    if (!['tree', 'read', 'shot', 'quit'].includes(command)) {
+      return this.createErrorResponse(
+        `Invalid command: ${command || '(missing)'}`,
+        ['Use one of: tree, read, shot, quit']
+      );
+    }
+    if (command === 'read' && !args.expression) {
+      return this.createErrorResponse(
+        'The read command requires an expression',
+        ['Pass e.g. {"command": "read", "target": ".", "expression": "position"}']
+      );
+    }
+
+    if (!this.activeProcess) {
+      return this.createErrorResponse(
+        'No active Godot run.',
+        ['Use run_project to start the game first, with signal_hook.gd installed (see README)']
+      );
+    }
+
+    const port = this.findHookPort();
+    if (!port) {
+      return this.createErrorResponse(
+        'The running game has no active signal hook.',
+        [
+          'Copy hook/signal_hook.gd to the project as res://signal_hook.gd and add it as an autoload',
+          'Restart the run via run_project after installing the hook',
+        ]
+      );
+    }
+
+    try {
+      if (!this.hookConn || this.hookConn.port !== port) {
+        this.dropHookConn();
+        this.hookConn = { port, conn: new HookConnection(port) };
+      }
+      const response = await this.hookConn.conn.request({
+        command,
+        target: args.target ?? '.',
+        expression: args.expression ?? '',
+        maxDepth: args.maxDepth ?? 3,
+      });
+      if (command === 'quit') this.dropHookConn();
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(response, null, 2),
+          },
+        ],
+      };
+    } catch (error: unknown) {
+      this.dropHookConn();
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      return this.createErrorResponse(
+        `Hook request failed: ${message}`,
+        ['The game may have exited — use get_debug_output to check', 'Restart via run_project and retry']
+      );
+    }
   }
 
   /**

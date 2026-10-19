@@ -22,9 +22,12 @@ no guilt.
   `Engine.`; cap to one expression, 2s eval budget enforced client-side by closing on timeout.
 
 ## Tools (sidecar side)
-- `hook_exec`: params `projectPath`, `command` (`tree|read|shot|quit`), `target` (node path for
-  tree/read), `expression` (for read). Errors if no live run with an active hook port.
-- Requires an active `run_project`/`run_project_capture` session; refuses otherwise.
+- `hook_exec`: params `command` (`tree|read|shot|quit`), `target` (node path for
+  tree/read), `expression` (for read), `maxDepth` (for tree). No `projectPath`: the server
+  tracks a single active run, so the tool operates on that run. Errors if no live run
+  with an active hook port.
+- Requires an active `run_project` session (`run_project_capture` exits too fast to query);
+  refuses otherwise.
 
 ## Acceptance
 - [ ] Fixture project + hook: `tree` returns root subtree, `read` evaluates `2+2` and a node
