@@ -91,6 +91,8 @@ class GodotServer {
     'recursive': 'recursive',
     'scene': 'scene',
     'max_diagnostics': 'maxDiagnostics',
+    'duration_seconds': 'durationSeconds',
+    'fail_on_error': 'failOnError',
   };
 
   /**
@@ -995,6 +997,32 @@ class GodotServer {
             required: ['projectPath'],
           },
         },
+        {
+          name: 'run_project_capture',
+          description: 'Run a Godot project headless for a fixed duration, parse [SIGNAL] JSON markers from output, and return an exit verdict',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              projectPath: {
+                type: 'string',
+                description: 'Path to the Godot project directory',
+              },
+              scene: {
+                type: 'string',
+                description: 'Optional: specific scene to run',
+              },
+              durationSeconds: {
+                type: 'number',
+                description: 'Optional: max run time in seconds (defaults to 30, max 280)',
+              },
+              failOnError: {
+                type: 'boolean',
+                description: 'Optional: verdict errors-seen when Godot error lines appear (defaults to true)',
+              },
+            },
+            required: ['projectPath'],
+          },
+        },
       ],
     }));
 
@@ -1034,6 +1062,8 @@ class GodotServer {
           return await this.handleDotnetBuild(request.params.arguments);
         case 'dotnet_test':
           return await this.handleDotnetTest(request.params.arguments);
+        case 'run_project_capture':
+          return await this.handleRunProjectCapture(request.params.arguments);
         default:
           throw new McpError(
             ErrorCode.MethodNotFound,
@@ -2477,6 +2507,167 @@ class GodotServer {
       filterArgs.push('--filter', String(filter));
     }
     return await this.runDotnetCommand('test', args, filterArgs);
+  }
+
+  /**
+   * Handle the run_project_capture tool (spec 03): headless fixed-duration run with
+   * [SIGNAL] marker parsing and an exit verdict. Refuses when a run is already active.
+   * @param args Tool arguments
+   */
+  private async handleRunProjectCapture(args: any) {
+    args = this.normalizeParameters(args);
+
+    if (!args.projectPath) {
+      return this.createErrorResponse(
+        'Project path is required',
+        ['Provide a valid path to a Godot project directory']
+      );
+    }
+
+    if (!this.validatePath(args.projectPath)) {
+      return this.createErrorResponse(
+        'Invalid project path',
+        ['Provide a valid path without ".." or other potentially unsafe characters']
+      );
+    }
+
+    const projectFile = join(args.projectPath, 'project.godot');
+    if (!existsSync(projectFile)) {
+      return this.createErrorResponse(
+        `Not a valid Godot project: ${args.projectPath}`,
+        [
+          'Ensure the path points to a directory containing a project.godot file',
+          'Use list_projects to find valid Godot projects',
+        ]
+      );
+    }
+
+    if (this.activeProcess) {
+      return this.createErrorResponse(
+        'A Godot project run is already active',
+        ['Use stop_project to end it before starting a capture']
+      );
+    }
+
+    if (!this.godotPath) {
+      await this.detectGodotPath();
+      if (!this.godotPath) {
+        return this.createErrorResponse(
+          'Could not find a valid Godot executable path',
+          [
+            'Ensure Godot is installed correctly',
+            'Set GODOT_PATH environment variable to specify the correct path',
+          ]
+        );
+      }
+    }
+
+    // Duration cap 280s keeps the tool inside the 300s host timeout (see spec 03).
+    const durationSeconds = Math.min(Math.max(Number(args.durationSeconds ?? 30) || 30, 1), 280);
+    const failOnError = args.failOnError ?? true;
+
+    const cmdArgs = ['--headless', '--path', args.projectPath];
+    if (args.scene && this.validatePath(args.scene)) {
+      cmdArgs.push(args.scene);
+    }
+    this.logDebug(`Capturing Godot run for ${durationSeconds}s: ${args.projectPath}`);
+
+    const startedAt = Date.now();
+    const child = spawn(this.godotPath, cmdArgs, { stdio: 'pipe' });
+    const lines: string[] = [];
+    const events: any[] = [];
+    let invalidMarkers = 0;
+    const MAX_LINES = 2000;
+    const ERROR_PATTERN = /(Godot Engine v.*ERROR|SCRIPT ERROR|ERROR:)/;
+
+    const pushLine = (stream: string, text: string): void => {
+      const trimmed = text.trim();
+      if (!trimmed) return;
+      if (lines.length < MAX_LINES) {
+        lines.push(`${stream}: ${trimmed}`);
+      }
+      const marker = /^\[SIGNAL\]\s*(\{.*\})\s*$/.exec(trimmed);
+      if (marker) {
+        try {
+          events.push(JSON.parse(marker[1]));
+        } catch {
+          invalidMarkers += 1;
+        }
+      }
+    };
+
+    child.stdout?.on('data', (data: Buffer) => {
+      for (const line of data.toString().split('\n')) pushLine('OUT', line);
+    });
+    child.stderr?.on('data', (data: Buffer) => {
+      for (const line of data.toString().split('\n')) pushLine('ERR', line);
+    });
+    // Register as the active process so concurrent runs are refused and cleanup kills it.
+    this.activeProcess = { process: child, output: [], errors: [] };
+    const tracked = this.activeProcess;
+
+    const exit = await new Promise<{ code: number | null; signal: string | null; timedOut: boolean }>((resolve) => {
+      const timer = setTimeout(() => {
+        try {
+          child.kill('SIGKILL');
+        } catch {
+          // Already exited; the exit handler below resolves.
+        }
+        resolve({ code: null, signal: 'SIGKILL', timedOut: true });
+      }, durationSeconds * 1000);
+      child.on('exit', (code: number | null, signal: string | null) => {
+        clearTimeout(timer);
+        resolve({ code, signal, timedOut: false });
+      });
+      child.on('error', (err: Error) => {
+        clearTimeout(timer);
+        pushLine('ERR', `failed to start Godot process: ${err.message}`);
+        resolve({ code: 1, signal: null, timedOut: false });
+      });
+    });
+
+    if (this.activeProcess === tracked) {
+      this.activeProcess = null;
+    }
+
+    let errorCount = 0;
+    for (const line of lines) {
+      if (ERROR_PATTERN.test(line)) errorCount += 1;
+    }
+
+    let verdict: string;
+    if (exit.timedOut) {
+      verdict = 'timeout';
+    } else if ((exit.code ?? 1) !== 0 || exit.signal) {
+      verdict = 'crashed';
+    } else if (failOnError && errorCount > 0) {
+      verdict = 'errors-seen';
+    } else {
+      verdict = 'clean-exit';
+    }
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(
+            {
+              verdict,
+              exitCode: exit.code,
+              signal: exit.signal,
+              durationMs: Date.now() - startedAt,
+              events,
+              invalidMarkers,
+              errorCount,
+              logTail: lines.slice(-50),
+              truncated: lines.length >= MAX_LINES,
+            },
+            null,
+            2
+          ),
+        },
+      ],
+    };
   }
 
   /**
