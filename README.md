@@ -82,7 +82,12 @@ Godot MCP enables AI agents to launch the Godot editor, run projects, capture de
   - `dotnet_test` test runs with structured results
 - **Runtime observation & control** (extended):
   - `run_project_capture` with `[SIGNAL]` markers and exit verdicts
-  - Opt-in in-game hook (`hook/signal_hook.gd`) + `hook_exec` (`tree|read|shot|quit`)
+  - Opt-in in-game hook (`hook/signal_hook.gd`) + `hook_exec` (`tree|read|shot|quit|press|stats`; `shot` returns path + base64)
+- **Scene inspection & editing** (new):
+  - `dump_scene`, `list_assets`, `get_project_settings` (no Godot run needed)
+  - `set_node_property`, `remove_node`, `rename_node`, `duplicate_node`,
+    `instance_scene`, `create_script`, `attach_script`, `connect_signal`
+  - `check_script` (fast GDScript parse), `run_tests`, `export_check`
 - **Multi-host setup** (extended): `setup --host opencode|claude|codex|chatgpt|all`
 
 ## Requirements

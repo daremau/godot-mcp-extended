@@ -1,6 +1,34 @@
 # Changelog
 
+## 0.3.0 — AI game-making loop (2026-10-19)
+
+- Static inspection: `dump_scene` (.tscn tree, no run), `list_assets` (paged),
+  `get_project_settings` (parsed project.godot).
+- Offline edits (headless Godot): `set_node_property` (incl. position:x),
+  `remove_node`, `rename_node`, `duplicate_node`, `instance_scene` (self-guard),
+  `attach_script`, `connect_signal` (TS-side [connection] append), `create_script`
+  (templates + overwrite guard).
+- Fast validation: `check_script` (godot --check-only, parsed SCRIPT ERRORs).
+- Runtime: `hook_exec press` (InputMap action press/release), `stats` (FPS/memory),
+  `shot` now returns path + base64 PNG (`includeImage`).
+- QA: `run_tests` (test-scene discovery + headless runs), `export_check`
+  (preset validation + optional --export-release).
+- Contract tests: 15 green (new traversal/identifier/hook validation cases).
+
 ## 0.2.0 — extended v1 (2026-10-19)
+
+- Static inspection: `dump_scene` (.tscn tree, no run), `list_assets` (paged),
+  `get_project_settings` (parsed project.godot).
+- Offline edits (headless Godot): `set_node_property` (incl. position:x),
+  `remove_node`, `rename_node`, `duplicate_node`, `instance_scene` (self-guard),
+  `attach_script`, `connect_signal` (TS-side [connection] append), `create_script`
+  (templates + overwrite guard).
+- Fast validation: `check_script` (godot --check-only, parsed SCRIPT ERRORs).
+- Runtime: `hook_exec press` (InputMap action press/release), `stats` (FPS/memory),
+  `shot` now returns path + base64 PNG (`includeImage`).
+- QA: `run_tests` (test-scene discovery + headless runs), `export_check`
+  (preset validation + optional --export-release).
+- Contract tests: 15 green (new traversal/identifier/hook validation cases).
 
 Forked from `Coding-Solo/godot-mcp`, renamed to `godot-mcp-extended`.
 

@@ -172,3 +172,28 @@ test('run_project_capture verdicts with mocked Godot CLI', async () => {
   assert.equal(body.events[0].kind, 'ready');
   await s.stop();
 });
+
+test('new edit/inspect contracts: traversal, missing project, identifier validation', async () => {
+  const s = startServer();
+  s.send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 't', version: '1' } } });
+  await s.next();
+  const call = async (id, name, args) => {
+    s.send({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } });
+    return s.next();
+  };
+  let r = await call(2, 'dump_scene', { projectPath: '/tmp/../etc', scenePath: 'Main.tscn' });
+  assert.match(JSON.stringify(r.result.content), /Invalid project path/);
+  r = await call(3, 'dump_scene', { projectPath: '/tmp', scenePath: 'Main.tscn' });
+  assert.match(JSON.stringify(r.result.content), /Not a valid Godot project/);
+  r = await call(4, 'set_node_property', { projectPath: '/tmp', scenePath: 'Main.tscn', nodePath: 'root/Bad/../X', property: 'position', value: 1 });
+  assert.match(JSON.stringify(r.result.content), /Invalid nodePath/);
+  r = await call(5, 'rename_node', { projectPath: '/tmp', scenePath: 'Main.tscn', nodePath: 'root/A', newName: 'bad-name!' });
+  assert.match(JSON.stringify(r.result.content), /Invalid newName/);
+  r = await call(6, 'hook_exec', { command: 'bogus' });
+  assert.match(JSON.stringify(r.result.content), /Invalid command/);
+  r = await call(7, 'hook_exec', { command: 'press' });
+  assert.match(JSON.stringify(r.result.content), /requires an action/);
+  r = await call(8, 'list_assets', { projectPath: '/tmp' });
+  assert.match(JSON.stringify(r.result.content), /Not a valid Godot project/);
+  await s.stop();
+});

@@ -84,12 +84,16 @@ func _dispatch(req: Dictionary) -> Dictionary:
 		"read":
 			return _cmd_read(req)
 		"shot":
-			return _cmd_shot()
+			return _cmd_shot(req)
+		"press":
+			return _cmd_press(req)
+		"stats":
+			return _cmd_stats()
 		"quit":
 			_tcp.stop()
 			get_tree().quit()
 			return {"ok": true, "result": "quitting"}
-	return {"ok": false, "error": "unknown command (allowed: tree|read|shot|quit)"}
+	return {"ok": false, "error": "unknown command (allowed: tree|read|shot|quit|press|stats)"}
 
 
 func _resolve(target: String) -> Node:
@@ -173,7 +177,7 @@ func _jsonable(value, depth: int):
 	return str(value)
 
 
-func _cmd_shot() -> Dictionary:
+func _cmd_shot(req: Dictionary) -> Dictionary:
 	var img := get_viewport().get_texture().get_image()
 	if img == null or img.is_empty():
 		return {"ok": false, "error": "no image (headless renderer?)"}
@@ -181,4 +185,55 @@ func _cmd_shot() -> Dictionary:
 	var rel := ".signal/shot-%d.png" % Time.get_ticks_msec()
 	if img.save_png("res://" + rel) != OK:
 		return {"ok": false, "error": "save failed"}
-	return {"ok": true, "result": {"path": ProjectSettings.globalize_path("res://" + rel)}}
+	var out := {"path": ProjectSettings.globalize_path("res://" + rel)}
+	var include_image := bool(req.get("includeImage", req.get("include_image", true)))
+	if include_image:
+		var buf := img.save_png_to_buffer()
+		if buf != null and buf.size() > 0 and buf.size() <= 2 * 1024 * 1024:
+			out["base64"] = Marshalls.raw_to_base64(buf)
+			out["mime"] = "image/png"
+		else:
+			out["base64_included"] = false
+	return {"ok": true, "result": out}
+
+
+func _cmd_press(req: Dictionary) -> Dictionary:
+	var action := String(req.get("action", ""))
+	if action == "" or not action.is_valid_identifier():
+		return {"ok": false, "error": "invalid action"}
+	if not InputMap.has_action(action):
+		return {"ok": false, "error": "unknown action: %s" % action}
+	Input.action_press(action)
+	var hold_ms := int(req.get("holdMs", req.get("hold_ms", 120)))
+	hold_ms = clampi(hold_ms, 0, 2000)
+	if hold_ms <= 0:
+		Input.action_release(action)
+		return {"ok": true, "result": {"action": action, "held_ms": 0, "released": true}}
+	# Release after a short delay without blocking the hook pump.
+	get_tree().create_timer(float(hold_ms) / 1000.0).timeout.connect(_on_press_timeout.bind(action))
+	return {"ok": true, "result": {"action": action, "held_ms": hold_ms, "scheduled_release": true}}
+
+
+func _on_press_timeout(action: String) -> void:
+	if InputMap.has_action(action) and Input.is_action_pressed(action):
+		Input.action_release(action)
+
+
+func _cmd_stats() -> Dictionary:
+	var root := get_tree().root
+	var count := 0
+	var stack: Array = [root]
+	while stack.size() > 0 and count < 5000:
+		var cur: Node = stack.pop_back()
+		count += 1
+		for child in cur.get_children():
+			stack.push_back(child)
+	return {"ok": true, "result": {
+		"fps": Engine.get_frames_per_second(),
+		"physics_fps": Engine.physics_ticks_per_second,
+		"process_frames": Engine.get_process_frames(),
+		"physics_frames": Engine.get_physics_frames(),
+		"time_scale": Engine.time_scale,
+		"node_count": count,
+		"static_memory": OS.get_static_memory_usage(),
+	}} 

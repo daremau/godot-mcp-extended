@@ -71,6 +71,20 @@ func _init():
             get_uid(params)
         "resave_resources":
             resave_resources(params)
+        "set_node_property":
+            set_node_property(params)
+        "remove_node":
+            remove_node(params)
+        "rename_node":
+            rename_node(params)
+        "duplicate_node":
+            duplicate_node(params)
+        "instance_scene":
+            instance_scene(params)
+        "attach_script":
+            attach_script(params)
+        "connect_signal":
+            connect_signal(params)
         _:
             log_error("Unknown operation: " + operation)
             quit(1)
@@ -1184,3 +1198,242 @@ func save_scene(params):
             printerr("Failed to save scene: " + str(error))
     else:
         printerr("Failed to pack scene: " + str(result))
+
+# Shared helpers for offline scene edits (allow-listed ops only, no arbitrary exec).
+func _resolve_scene_root(scene_path_param: String):
+    var full_scene_path = scene_path_param
+    if not full_scene_path.begins_with("res://"):
+        full_scene_path = "res://" + full_scene_path
+    if not FileAccess.file_exists(full_scene_path):
+        printerr("Failed to: scene does not exist at " + full_scene_path)
+        return null
+    var scene = load(full_scene_path)
+    if not scene:
+        printerr("Failed to: could not load scene " + full_scene_path)
+        return null
+    var scene_root = scene.instantiate()
+    if not scene_root:
+        printerr("Failed to: could not instantiate scene " + full_scene_path)
+        return null
+    return [full_scene_path, scene_root]
+
+func _find_offline_node(scene_root: Node, node_path_param: String):
+    if node_path_param == "" or node_path_param == "root":
+        return scene_root
+    var rel = node_path_param
+    if rel.begins_with("root/"):
+        rel = rel.substr(5)
+    else:
+        printerr("Failed to: node path must start with root/ (" + node_path_param + ")")
+        return null
+    if rel.contains(".."):
+        printerr("Failed to: invalid node path")
+        return null
+    var node = scene_root.get_node_or_null(rel)
+    if not node:
+        printerr("Failed to: node not found " + node_path_param)
+        return null
+    return node
+
+func _save_offline_scene(full_scene_path: String, scene_root: Node, label: String) -> bool:
+    var packed_scene = PackedScene.new()
+    var result = packed_scene.pack(scene_root)
+    if result != OK:
+        printerr("Failed to: could not pack scene (" + str(result) + ")")
+        return false
+    var error = ResourceSaver.save(packed_scene, full_scene_path)
+    if error != OK:
+        printerr("Failed to: could not save scene (" + str(error) + ")")
+        return false
+    print(label + " successfully: " + full_scene_path)
+    return true
+
+func set_node_property(params):
+    if not params.has("scene_path") or not params.has("node_path") or not params.has("property"):
+        printerr("Failed to: scene_path, node_path and property are required")
+        quit(1)
+    var resolved = _resolve_scene_root(str(params.scene_path))
+    if resolved == null:
+        quit(1)
+    var full_scene_path = resolved[0]
+    var scene_root = resolved[1]
+    var node = _find_offline_node(scene_root, str(params.node_path))
+    if node == null:
+        quit(1)
+    var prop = str(params.property)
+    if not params.has("value"):
+        printerr("Failed to: value is required")
+        quit(1)
+    var value = params.value
+    if typeof(value) == TYPE_STRING and (value as String).begins_with("res://"):
+        var loaded = load(value)
+        if loaded != null:
+            value = loaded
+    var parts = prop.split(":")
+    if parts.size() == 2:
+        var base_val = node.get(parts[0])
+        if base_val == null:
+            printerr("Failed to: unknown base property " + parts[0])
+            quit(1)
+        if base_val is Vector2 and (parts[1] == "x" or parts[1] == "y"):
+            var v2 = base_val as Vector2
+            if parts[1] == "x":
+                v2.x = float(value)
+            else:
+                v2.y = float(value)
+            node.set(parts[0], v2)
+        elif base_val is Vector3 and (parts[1] == "x" or parts[1] == "y" or parts[1] == "z"):
+            var v3 = base_val as Vector3
+            v3[parts[1]] = float(value)
+            node.set(parts[0], v3)
+        else:
+            printerr("Failed to: unsupported sub-name " + prop)
+            quit(1)
+    else:
+        node.set(prop, value)
+    if not _save_offline_scene(full_scene_path, scene_root, "Property " + prop + " set"):
+        quit(1)
+
+func remove_node(params):
+    var resolved = _resolve_scene_root(str(params.scene_path))
+    if resolved == null:
+        quit(1)
+    var scene_root = resolved[1]
+    var node = _find_offline_node(scene_root, str(params.node_path))
+    if node == null:
+        quit(1)
+    if node == scene_root:
+        printerr("Failed to: cannot remove root")
+        quit(1)
+    var parent = node.get_parent()
+    if parent == null:
+        printerr("Failed to: node has no parent")
+        quit(1)
+    parent.remove_child(node)
+    node.free()
+    if not _save_offline_scene(resolved[0], scene_root, "Node removed"):
+        quit(1)
+
+func rename_node(params):
+    var resolved = _resolve_scene_root(str(params.scene_path))
+    if resolved == null:
+        quit(1)
+    var scene_root = resolved[1]
+    var node = _find_offline_node(scene_root, str(params.node_path))
+    if node == null:
+        quit(1)
+    var new_name = str(params.get("new_name", params.get("newName", "")))
+    if new_name == "":
+        printerr("Failed to: new name is required")
+        quit(1)
+    node.name = new_name
+    if not _save_offline_scene(resolved[0], scene_root, "Node renamed"):
+        quit(1)
+
+func duplicate_node(params):
+    var resolved = _resolve_scene_root(str(params.scene_path))
+    if resolved == null:
+        quit(1)
+    var scene_root = resolved[1]
+    var node = _find_offline_node(scene_root, str(params.node_path))
+    if node == null:
+        quit(1)
+    if node == scene_root:
+        printerr("Failed to: cannot duplicate root")
+        quit(1)
+    var copy = node.duplicate()
+    var wanted = str(params.get("new_name", params.get("newName", "")))
+    if wanted != "":
+        copy.name = wanted
+    else:
+        copy.name = str(node.name) + "Copy"
+    var parent = node.get_parent()
+    parent.add_child(copy)
+    copy.owner = scene_root
+    var stack = [copy]
+    while stack.size() > 0:
+        var cur = stack.pop_back()
+        cur.owner = scene_root
+        for child in cur.get_children():
+            stack.push_back(child)
+    if not _save_offline_scene(resolved[0], scene_root, "Node duplicated"):
+        quit(1)
+
+func instance_scene(params):
+    var resolved = _resolve_scene_root(str(params.scene_path))
+    if resolved == null:
+        quit(1)
+    var full_scene_path = resolved[0]
+    var scene_root = resolved[1]
+    var parent_key = str(params.get("parent_node_path", params.get("parentNodePath", "root")))
+    var parent = _find_offline_node(scene_root, parent_key)
+    if parent == null:
+        quit(1)
+    var source_key = str(params.get("source_scene", params.get("sourceScene", "")))
+    var full_source = source_key
+    if not full_source.begins_with("res://"):
+        full_source = "res://" + full_source
+    if not FileAccess.file_exists(full_source):
+        printerr("Failed to: source scene does not exist")
+        quit(1)
+    var packed = load(full_source) as PackedScene
+    if packed == null:
+        printerr("Failed to: could not load source scene")
+        quit(1)
+    var inst = packed.instantiate()
+    var wanted = str(params.get("node_name", params.get("nodeName", "")))
+    if wanted != "":
+        inst.name = wanted
+    parent.add_child(inst)
+    inst.owner = scene_root
+    if not _save_offline_scene(full_scene_path, scene_root, "Scene instanced"):
+        quit(1)
+
+func attach_script(params):
+    var resolved = _resolve_scene_root(str(params.scene_path))
+    if resolved == null:
+        quit(1)
+    var scene_root = resolved[1]
+    var node = _find_offline_node(scene_root, str(params.node_path))
+    if node == null:
+        quit(1)
+    var script_key = str(params.get("script_path", params.get("scriptPath", "")))
+    var full_script = script_key
+    if not full_script.begins_with("res://"):
+        full_script = "res://" + full_script
+    if not full_script.ends_with(".gd") or full_script.contains(".."):
+        printerr("Failed to: invalid script path")
+        quit(1)
+    if not FileAccess.file_exists(full_script):
+        printerr("Failed to: script does not exist")
+        quit(1)
+    var script_res = load(full_script)
+    if not (script_res is Script):
+        printerr("Failed to: not a script resource")
+        quit(1)
+    node.set_script(script_res)
+    if not _save_offline_scene(resolved[0], scene_root, "Script attached"):
+        quit(1)
+
+func connect_signal(params):
+    var resolved = _resolve_scene_root(str(params.scene_path))
+    if resolved == null:
+        quit(1)
+    var scene_root = resolved[1]
+    var source_key = str(params.get("source_node", params.get("sourceNode", "")))
+    var target_key = str(params.get("target_node", params.get("targetNode", "")))
+    var signal_name = str(params.get("signal_name", params.get("signalName", "")))
+    var method_name = str(params.get("method_name", params.get("methodName", "")))
+    var source = _find_offline_node(scene_root, source_key)
+    var target = _find_offline_node(scene_root, target_key)
+    if source == null or target == null:
+        quit(1)
+    if signal_name == "" or method_name == "":
+        printerr("Failed to: signal and method are required")
+        quit(1)
+    var err = source.connect(signal_name, Callable(target, method_name))
+    if err != OK:
+        printerr("Failed to: connect returned " + str(err))
+        quit(1)
+    if not _save_offline_scene(resolved[0], scene_root, "Signal connected"):
+        quit(1)
