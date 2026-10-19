@@ -9,7 +9,7 @@
 
 import { fileURLToPath } from 'url';
 import { join, dirname, basename, normalize } from 'path';
-import { existsSync, readdirSync, mkdirSync } from 'fs';
+import { existsSync, readdirSync, mkdirSync, statSync } from 'fs';
 import { spawn, execFile } from 'child_process';
 import { promisify } from 'util';
 
@@ -89,6 +89,7 @@ class GodotServer {
     'directory': 'directory',
     'recursive': 'recursive',
     'scene': 'scene',
+    'max_diagnostics': 'maxDiagnostics',
   };
 
   /**
@@ -923,6 +924,58 @@ class GodotServer {
             required: ['projectPath'],
           },
         },
+        {
+          name: 'dotnet_build',
+          description: 'Build the .NET solution/project of a Godot 4.x game and return structured compiler diagnostics',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              projectPath: {
+                type: 'string',
+                description: 'Path to the Godot project directory',
+              },
+              configuration: {
+                type: 'string',
+                description: 'Optional: MSBuild configuration, Debug or Release (defaults to Release)',
+              },
+              target: {
+                type: 'string',
+                description: 'Optional: specific .sln or .csproj file name within the project directory',
+              },
+              maxDiagnostics: {
+                type: 'number',
+                description: 'Optional: maximum diagnostics to return (defaults to 200)',
+              },
+            },
+            required: ['projectPath'],
+          },
+        },
+        {
+          name: 'dotnet_test',
+          description: 'Run dotnet test for a Godot 4.x .NET project and return structured results',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              projectPath: {
+                type: 'string',
+                description: 'Path to the Godot project directory',
+              },
+              configuration: {
+                type: 'string',
+                description: 'Optional: MSBuild configuration, Debug or Release (defaults to Release)',
+              },
+              filter: {
+                type: 'string',
+                description: 'Optional: test filter expression passed to --filter',
+              },
+              maxDiagnostics: {
+                type: 'number',
+                description: 'Optional: maximum diagnostics to return (defaults to 200)',
+              },
+            },
+            required: ['projectPath'],
+          },
+        },
       ],
     }));
 
@@ -958,6 +1011,10 @@ class GodotServer {
           return await this.handleGetUid(request.params.arguments);
         case 'update_project_uids':
           return await this.handleUpdateProjectUids(request.params.arguments);
+        case 'dotnet_build':
+          return await this.handleDotnetBuild(request.params.arguments);
+        case 'dotnet_test':
+          return await this.handleDotnetTest(request.params.arguments);
         default:
           throw new McpError(
             ErrorCode.MethodNotFound,
@@ -2166,6 +2223,241 @@ class GodotServer {
         ]
       );
     }
+  }
+
+  /**
+   * Resolve the .NET build file for a Godot project: preferred .sln, else single .csproj.
+   * @returns The build file name, or an object describing ambiguity/absence.
+   */
+  private resolveDotnetBuildFile(projectPath: string): { file: string } | { missing: true } | { ambiguous: string[] } {
+    let entries: string[];
+    try {
+      entries = readdirSync(projectPath);
+    } catch {
+      return { missing: true };
+    }
+
+    const isFile = (name: string): boolean => {
+      try {
+        return statSync(join(projectPath, name)).isFile();
+      } catch {
+        return false;
+      }
+    };
+
+    const solutions = entries.filter((e) => e.endsWith('.sln') && isFile(e)).sort();
+    if (solutions.length > 0) {
+      return { file: solutions[0] };
+    }
+
+    const projects = entries.filter((e) => e.endsWith('.csproj') && isFile(e)).sort();
+    if (projects.length === 1) {
+      return { file: projects[0] };
+    }
+    if (projects.length > 1) {
+      return { ambiguous: projects };
+    }
+    return { missing: true };
+  }
+
+  /**
+   * Check that the dotnet CLI is available.
+   * @returns Version string, or null when unavailable.
+   */
+  private async checkDotnet(): Promise<string | null> {
+    try {
+      const { stdout } = await execFileAsync('dotnet', ['--version'], { timeout: 30000 });
+      return stdout.trim();
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Parse MSBuild full-path diagnostic lines into structured entries.
+   */
+  private parseDotnetDiagnostics(output: string): Array<{ file: string; line: number; col: number; severity: string; code: string; message: string }> {
+    const diagnostics: Array<{ file: string; line: number; col: number; severity: string; code: string; message: string }> = [];
+    const pattern = /^(.*)\((\d+)(?:,(\d+))?\):\s(error|warning)\s([A-Za-z0-9]+):\s(.*)$/;
+    for (const rawLine of output.split('\n')) {
+      const line = rawLine.replace(/\r$/, '');
+      const match = pattern.exec(line);
+      if (match) {
+        diagnostics.push({
+          file: match[1],
+          line: parseInt(match[2], 10),
+          col: match[3] !== undefined ? parseInt(match[3], 10) : 0,
+          severity: match[4],
+          code: match[5],
+          message: match[6],
+        });
+      }
+    }
+    return diagnostics;
+  }
+
+  /**
+   * Shared runner for dotnet build/test with structured diagnostics.
+   */
+  private async runDotnetCommand(
+    verb: 'build' | 'test',
+    args: any,
+    extraArgs: string[]
+  ) {
+    args = this.normalizeParameters(args);
+
+    if (!args.projectPath) {
+      return this.createErrorResponse(
+        'Project path is required',
+        ['Provide a valid path to a Godot project directory']
+      );
+    }
+
+    if (!this.validatePath(args.projectPath)) {
+      return this.createErrorResponse(
+        'Invalid project path',
+        ['Provide a valid path without ".." or other potentially unsafe characters']
+      );
+    }
+
+    const projectFile = join(args.projectPath, 'project.godot');
+    if (!existsSync(projectFile)) {
+      return this.createErrorResponse(
+        `Not a valid Godot project: ${args.projectPath}`,
+        [
+          'Ensure the path points to a directory containing a project.godot file',
+          'Use list_projects to find valid Godot projects',
+        ]
+      );
+    }
+
+    const configuration = args.configuration ?? 'Release';
+    if (configuration !== 'Debug' && configuration !== 'Release') {
+      return this.createErrorResponse(
+        `Invalid configuration: ${configuration}`,
+        ['Use "Debug" or "Release"']
+      );
+    }
+
+    const maxDiagnostics = args.maxDiagnostics ?? 200;
+
+    const resolved = this.resolveDotnetBuildFile(args.projectPath);
+    if ('missing' in resolved) {
+      return this.createErrorResponse(
+        `No .sln or .csproj found in ${args.projectPath}`,
+        ['Godot 4.x .NET projects generate a .sln next to project.godot — open the project in the Godot editor once to create it']
+      );
+    }
+    if ('ambiguous' in resolved) {
+      return this.createErrorResponse(
+        `Multiple .csproj files found and no .sln: ${resolved.ambiguous.join(', ')}`,
+        ['Pass one explicitly via the "target" parameter']
+      );
+    }
+
+    let buildFile = resolved.file;
+    if (args.target) {
+      if (!this.validatePath(args.target) || args.target.includes('/') || args.target.includes('\\')) {
+        return this.createErrorResponse(
+          'Invalid target: must be a plain .sln or .csproj file name, not a path',
+          ['Pass e.g. "MyGame.sln" without directories']
+        );
+      }
+      buildFile = args.target;
+    }
+
+    const dotnetVersion = await this.checkDotnet();
+    if (!dotnetVersion) {
+      return this.createErrorResponse(
+        'The dotnet CLI was not found on PATH',
+        ['Install the .NET SDK matching your Godot .NET version', 'Ensure "dotnet --version" works in a terminal']
+      );
+    }
+
+    const cmdArgs = [verb, join(args.projectPath, buildFile), '-c', configuration, '--nologo', '-v', 'q', ...extraArgs];
+    this.logDebug(`Running: dotnet ${cmdArgs.join(' ')}`);
+
+    let stdout = '';
+    let stderr = '';
+    let exitCode = 0;
+    try {
+      const result = await execFileAsync('dotnet', cmdArgs, {
+        timeout: 280000,
+        maxBuffer: 16 * 1024 * 1024,
+      });
+      stdout = result.stdout ?? '';
+      stderr = result.stderr ?? '';
+    } catch (error: unknown) {
+      const execError = error as Error & { stdout?: string; stderr?: string; code?: number; killed?: boolean };
+      stdout = execError.stdout ?? '';
+      stderr = execError.stderr ?? '';
+      exitCode = execError.code ?? 1;
+      if (execError.killed) {
+        return this.createErrorResponse(
+          `dotnet ${verb} timed out after 280s`,
+          ['Build once from a terminal to warm the NuGet/MSBuild caches, then retry']
+        );
+      }
+    }
+
+    const diagnostics = this.parseDotnetDiagnostics(`${stdout}\n${stderr}`);
+    // MSBuild often repeats each diagnostic (e.g. across stdout/stderr): dedupe identical entries.
+    const seen = new Set<string>();
+    const unique = diagnostics.filter((d) => {
+      const key = `${d.file}:${d.line}:${d.col}:${d.severity}:${d.code}:${d.message}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    const errors = unique.filter((d) => d.severity === 'error').length;
+    const warnings = unique.filter((d) => d.severity === 'warning').length;
+    const truncated = unique.length > maxDiagnostics;
+    const result: any = {
+      success: exitCode === 0 && errors === 0,
+      verb,
+      buildFile,
+      configuration,
+      dotnetVersion,
+      exitCode,
+      errors,
+      warnings,
+      diagnostics: unique.slice(0, maxDiagnostics),
+      truncated,
+    };
+    if (!result.success && unique.length === 0) {
+      const tail = `${stdout}\n${stderr}`.trim().split('\n').slice(-50).join('\n');
+      result.rawTail = tail;
+    }
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: JSON.stringify(result, null, 2),
+        },
+      ],
+    };
+  }
+
+  /**
+   * Handle the dotnet_build tool
+   * @param args Tool arguments
+   */
+  private async handleDotnetBuild(args: any) {
+    return await this.runDotnetCommand('build', args, ['/p:GenerateFullPaths=true']);
+  }
+
+  /**
+   * Handle the dotnet_test tool
+   * @param args Tool arguments
+   */
+  private async handleDotnetTest(args: any) {
+    const filterArgs: string[] = [];
+    const filter = this.normalizeParameters(args).filter;
+    if (filter) {
+      filterArgs.push('--filter', String(filter));
+    }
+    return await this.runDotnetCommand('test', args, filterArgs);
   }
 
   /**
