@@ -77,6 +77,9 @@ Godot MCP enables AI agents to launch the Godot editor, run projects, capture de
 - **UID Management** (for Godot 4.4+):
   - Get UID for specific files
   - Update UID references by resaving resources
+- **.NET Diagnostics** (extended):
+  - `dotnet_build` with structured file/line/code compiler diagnostics
+  - `dotnet_test` test runs with structured results
 
 ## Requirements
 
@@ -99,6 +102,46 @@ With environment variables:
 ```bash
 claude mcp add godot -e GODOT_PATH=/path/to/godot -e DEBUG=true -- npx @coding-solo/godot-mcp
 ```
+
+### opencode
+
+Easiest — use the built-in installer (backs up your config first):
+
+```bash
+node build/index.js setup --host opencode --godot-path /path/to/godot
+```
+
+Then restart opencode. Or add manually to `~/.config/opencode/opencode.json`:
+
+```json
+{
+  "mcp": {
+    "godot-mcp": {
+      "command": ["node", "/path/to/godot-mcp-extended/build/index.js"],
+      "enabled": true,
+      "type": "local",
+      "environment": { "GODOT_PATH": "/path/to/godot" },
+      "timeout": 300000
+    }
+  }
+}
+```
+
+### ChatGPT desktop / Codex CLI
+
+For Codex CLI, use the installer (appends a `[mcp_servers.godot-mcp]` table to `~/.codex/config.toml`):
+
+```bash
+node build/index.js setup --host codex --godot-path /path/to/godot
+```
+
+For the ChatGPT desktop app, MCP config paths vary by version — run the installer for manual steps:
+
+```bash
+node build/index.js setup --host chatgpt --godot-path /path/to/godot
+```
+
+then add the printed command (`node …/build/index.js` with `GODOT_PATH` set) as a local MCP server and restart the app.
 
 <details>
 <summary><strong>Cline</strong></summary>

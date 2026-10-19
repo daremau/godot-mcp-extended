@@ -21,6 +21,7 @@ import {
   ListToolsRequestSchema,
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
+import { runSetup } from './setup.js';
 
 // Check if debug mode is enabled
 const DEBUG_MODE: boolean = process.env.DEBUG === 'true';
@@ -387,6 +388,24 @@ class GodotServer {
 
     this.logDebug(`Failed to set invalid Godot path: ${normalizedPath}`);
     return false;
+  }
+
+  /**
+   * Resolve the Godot executable path, honoring an explicit override first.
+   * Public so the multi-host installer (setup.ts) reuses the same detection order.
+   * @returns The resolved path, or null when none is valid.
+   */
+  public async resolveGodotPath(override?: string): Promise<string | null> {
+    if (override) {
+      const normalized = normalize(override);
+      if (await this.isValidGodotPath(normalized)) {
+        this.godotPath = normalized;
+        return normalized;
+      }
+      return null;
+    }
+    await this.detectGodotPath();
+    return this.godotPath;
   }
 
   /**
@@ -2504,10 +2523,19 @@ class GodotServer {
   }
 }
 
-// Create and run the server
+// Create and run the server (or the multi-host installer when `setup` is passed)
 const server = new GodotServer();
-server.run().catch((error: unknown) => {
-  const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-  console.error('Failed to run server:', errorMessage);
-  process.exit(1);
-});
+const cliArgs = process.argv.slice(2);
+if (cliArgs.includes('setup')) {
+  runSetup(
+    cliArgs.filter((a) => a !== 'setup'),
+    __filename,
+    (override?: string) => server.resolveGodotPath(override)
+  ).then((code) => process.exit(code));
+} else {
+  server.run().catch((error: unknown) => {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error('Failed to run server:', errorMessage);
+    process.exit(1);
+  });
+}
